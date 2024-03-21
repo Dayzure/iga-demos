@@ -1,0 +1,244 @@
+{
+  "definition": {
+    "$schema": "https://schema.management.azure.com/providers/Microsoft.Logic/schemas/2016-06-01/workflowdefinition.json#",
+    "contentVersion": "1.0.0.0",
+    "triggers": {
+      "Recurrence": {
+        "type": "Recurrence",
+        "recurrence": {
+          "frequency": "Day",
+          "interval": 1
+        }
+      }
+    },
+    "actions": {
+      "ForEachInstance": {
+        "type": "Foreach",
+        "foreach": "@outputs('GetActiveInstancesOfAccessReview')['body']?['value']",
+        "actions": {
+          "For_each": {
+            "type": "Foreach",
+            "foreach": "@body('GetInstanceDecisions')?['value']",
+            "actions": {
+              "AppendSubjectToArray": {
+                "type": "AppendToArrayVariable",
+                "inputs": {
+                  "name": "SubjectsJsonArray",
+                  "value": "@outputs('ComposeSubject')"
+                },
+                "runAfter": {
+                  "ComposeSubject": [
+                    "Succeeded"
+                  ]
+                }
+              },
+              "ComposeSubject": {
+                "type": "Compose",
+                "inputs": {
+                  "id": "@{items('For_each')['principal']['id']}"
+                }
+              },
+              "Condition": {
+                "type": "If",
+                "expression": {
+                  "and": [
+                    {
+                      "equals": [
+                        "@length(variables('SubjectsJsonArray'))",
+                        10
+                      ]
+                    }
+                  ]
+                },
+                "actions": {
+                  "CleanUpSubjects": {
+                    "type": "SetVariable",
+                    "inputs": {
+                      "name": "SubjectsJsonArray",
+                      "value": "@null"
+                    },
+                    "runAfter": {
+                      "TriggerTerminationWorkflow": [
+                        "Succeeded"
+                      ]
+                    }
+                  },
+                  "TriggerTerminationWorkflow": {
+                    "type": "Http",
+                    "inputs": {
+                      "uri": "https://graph.microsoft.com/v1.0/identityGovernance/lifecycleWorkflows/workflows/@{variables('WorkflowId')}/activate",
+                      "method": "POST",
+                      "headers": {
+                        "Conent-Type": "application/json"
+                      },
+                      "body": {
+                        "subjects": "@variables('SubjectsJsonArray')"
+                      },
+                      "authentication": {
+                        "audience": "https://graph.microsoft.com",
+                        "identity": "/subscriptions/5ea2c968-dac1-41de-ab07-19b3619077aa/resourceGroups/iga-mod-demos/providers/Microsoft.ManagedIdentity/userAssignedIdentities/iga-mod-demos-graph-access",
+                        "type": "ManagedServiceIdentity"
+                      }
+                    },
+                    "operationOptions": "DisableAsyncPattern"
+                  }
+                },
+                "else": {
+                  "actions": {}
+                },
+                "runAfter": {
+                  "AppendSubjectToArray": [
+                    "Succeeded"
+                  ]
+                }
+              }
+            },
+            "runAfter": {
+              "GetInstanceDecisions": [
+                "Succeeded"
+              ]
+            }
+          },
+          "GetInstanceDecisions": {
+            "type": "Http",
+            "inputs": {
+              "uri": "https://graph.microsoft.com/v1.0/identityGovernance/accessReviews/definitions/@{variables('AccessReviewId')}/instances/@{items('ForEachInstance')?['id']}/decisions",
+              "method": "GET",
+              "authentication": {
+                "audience": "https://graph.microsoft.com/",
+                "identity": "/subscriptions/5ea2c968-dac1-41de-ab07-19b3619077aa/resourceGroups/iga-mod-demos/providers/Microsoft.ManagedIdentity/userAssignedIdentities/iga-mod-demos-graph-access",
+                "type": "ManagedServiceIdentity"
+              }
+            }
+          },
+          "WorkFlowRanOrSubjectsGreaterThan0": {
+            "type": "If",
+            "expression": {
+              "or": [
+                {
+                  "greater": [
+                    "@length(variables('SubjectsJsonArray'))",
+                    0
+                  ]
+                }
+              ]
+            },
+            "actions": {
+              "RunWorkflowFinal": {
+                "type": "Http",
+                "inputs": {
+                  "uri": "https://graph.microsoft.com/v1.0/identityGovernance/lifecycleWorkflows/workflows/@{variables('WorkflowId')}/activate",
+                  "method": "POST",
+                  "headers": {
+                    "Content-Type": "application/json"
+                  },
+                  "body": {
+                    "subjects": "@variables('SubjectsJsonArray')"
+                  },
+                  "authentication": {
+                    "audience": "https://graph.microsoft.com/",
+                    "identity": "/subscriptions/5ea2c968-dac1-41de-ab07-19b3619077aa/resourceGroups/iga-mod-demos/providers/Microsoft.ManagedIdentity/userAssignedIdentities/iga-mod-demos-graph-access",
+                    "type": "ManagedServiceIdentity"
+                  }
+                },
+                "operationOptions": "DisableAsyncPattern"
+              }
+            },
+            "else": {
+              "actions": {}
+            },
+            "runAfter": {
+              "For_each": [
+                "Succeeded"
+              ]
+            }
+          }
+        },
+        "runAfter": {
+          "GetActiveInstancesOfAccessReview": [
+            "Succeeded"
+          ]
+        }
+      },
+      "GetActiveInstancesOfAccessReview": {
+        "type": "Http",
+        "inputs": {
+          "uri": "https://graph.microsoft.com/v1.0/identityGovernance/accessReviews/definitions/@{variables('AccessReviewId')}/instances",
+          "method": "GET",
+          "queries": {
+            "$filter": "status eq 'InProgress'",
+            "$select": "id"
+          },
+          "authentication": {
+            "audience": "https://graph.microsoft.com/",
+            "identity": "/subscriptions/5ea2c968-dac1-41de-ab07-19b3619077aa/resourceGroups/iga-mod-demos/providers/Microsoft.ManagedIdentity/userAssignedIdentities/iga-mod-demos-graph-access",
+            "type": "ManagedServiceIdentity"
+          }
+        },
+        "runAfter": {
+          "InitializeSubjects": [
+            "Succeeded"
+          ]
+        }
+      },
+      "InitAccessReviewId": {
+        "type": "InitializeVariable",
+        "inputs": {
+          "variables": [
+            {
+              "name": "AccessReviewId",
+              "type": "string",
+              "value": "7b278ea8-33ba-494c-916d-1daafde4bced"
+            }
+          ]
+        },
+        "runAfter": {
+          "InitiWorkflowId": [
+            "Succeeded"
+          ]
+        }
+      },
+      "InitiWorkflowId": {
+        "type": "InitializeVariable",
+        "inputs": {
+          "variables": [
+            {
+              "name": "WorkflowId",
+              "type": "string",
+              "value": "ee68cfbb-0a11-4ecf-bcf6-263b44132ac8"
+            }
+          ]
+        },
+        "runAfter": {}
+      },
+      "InitializeSubjects": {
+        "type": "InitializeVariable",
+        "inputs": {
+          "variables": [
+            {
+              "name": "SubjectsJsonArray",
+              "type": "array"
+            }
+          ]
+        },
+        "runAfter": {
+          "InitAccessReviewId": [
+            "Succeeded"
+          ]
+        }
+      }
+    },
+    "outputs": {},
+    "parameters": {
+      "$connections": {
+        "type": "Object",
+        "defaultValue": {}
+      }
+    }
+  },
+  "parameters": {
+    "$connections": {
+      "value": {}
+    }
+  }
+}
